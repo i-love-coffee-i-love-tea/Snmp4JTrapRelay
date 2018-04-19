@@ -3,6 +3,8 @@
   <component name="ProjectModuleManager">
     <modules>
       <module fileurl="file://$PROJECT_DIR$/Snmp4JTrapRelay.iml" filepath="$PROJECT_DIR$/Snmp4JTrapRelay.iml" />
+      <module fileurl="file://$PROJECT_DIR$/trap-relay-client/trap-relay-client.iml" filepath="$PROJECT_DIR$/trap-relay-client/trap-relay-client.iml" />
+      <module fileurl="file://$PROJECT_DIR$/trap-relay-daemon/trap-relay-daemon.iml" filepath="$PROJECT_DIR$/trap-relay-daemon/trap-relay-daemon.iml" />
     </modules>
   </component>
 </project>

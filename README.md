@@ -1,12 +1,16 @@
 # Snmp4JTrapRelay
+
 Proof of concept of a small daemon that collects SNMP trap events and puts them in a queue
 for tcp clients to connect, register and receive SNMP trap events in json format
 
-Goals:
+## Goals 
  - Small daemon, externalizing the SNMP-trap-listening-part from a larger application, so the application can run with normal user permission
    (Background: on linux a process must run with root permission to open sockets on ports below 1024)
- - Decouple development lifecycles of parts with different responsibilities (ui, trap listening), so the main application doesn't have to run to collect traps
+ - Decouple development lifecycles of parts with different responsibilities (ui, trap listening), so the main application doesn't have to run to collect traps.
+ - Be able to develop the larger management application independently, without having to run the ide as root for debugging
 
+
+## How does it work?
 
 ```
  .------------------------.
@@ -27,8 +31,52 @@ Goals:
  *-----------------------------*      *-----------------------------*     *--- - - -
 ```
 
+## Compiling
 
-Next steps to make it a mature project:
+$ mvn package
+
+
+## Running it
+
+1. Start the trap relay daemon:
+
+    ```
+    $ cd trap-relay-daemon/target  
+    $ sudo java -jar trap-relay-daemon/target/trap-relay-daemon-1.0-SNAPSHOT-jar-with-dependencies.jar
+    ```
+    
+2. Start the client. It will connect to the daemon and print SNMP traps to the console in JSON format:
+
+    ```
+    $ java -jar trap-relay-client/target/trap-relay-client-1.0-SNAPSHOT-jar-with-dependencies.jar
+    ```
+    
+3. Send a test trap:
+
+    ```    
+    $ snmptrap -v 2c -c public localhost '' 1.3.6.1.4.1.8072.2.3.0.1 1.3.6.1.4.1.8072.2.3.2.1 i 123456
+    ```
+
+The client output should look like this:
+
+```
+Server: OK
+registered
+Server sent a trap: { "trapSrc": "127.0.0.1/52401", "secLevel": "1", "secModel": "2", "secName": "public", 
+                      "variables": { "1.3.6.1.2.1.1.3.0": "7 days, 14:24:34.17",
+                                     "1.3.6.1.6.3.1.1.4.1.0": "1.3.6.1.4.1.8072.2.3.0.1",
+                                     "1.3.6.1.4.1.8072.2.3.2.1": "123456" } }
+```
+
+If the programs are run without arguments the server listens for client connections on localhost port 1162 by default
+and the client by default connects to the same socket.
+
+They both take a hostname or ip as first parameter and a port number as second parameter to change this behaviour. 
+
+
+
+
+## Next steps to make it a mature project
 
    - add timestamps to converted traps
    - add SSLSocket for TLS 1.2, create certificate store for server and trust store for client
@@ -45,7 +93,7 @@ Next steps to make it a mature project:
    - client: implement exchangeable trap handling behaviour
 
 
-I have not used redis yet, but to me it increasingly looks like it.
+I have not used redis yet, but to me parts of this increasingly look similar.
 Perhaps i might as well use this, but I enjoy learning about server programming and like to find my own solutions.
 Also I have a feeling redis might pull in too many dependencies, which i don't need and want.
 It certainly has its many use cases where it does a great job, but it also has a ton of

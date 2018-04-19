@@ -18,8 +18,13 @@ public class TrapRelayClient {
     BufferedReader  bir = null;
 
     public static void main(String[] args) {
+
+        if (args.length == 0) {
+            args = new String[]{"localhost", "1162"};
+        }
+
         TrapRelayClient client = new TrapRelayClient();
-        client.connectToServer("localhost", 1162);
+        client.connectToServer(args[0], Integer.parseInt(args[1]));
     }
 
     public TrapRelayClient() {
