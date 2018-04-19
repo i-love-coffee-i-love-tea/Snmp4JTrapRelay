@@ -1,0 +1,9 @@
+<component name="ArtifactManager">
+  <artifact type="jar" build-on-make="true" name="Snmp4JTrapRelay:jar">
+    <output-path>$PROJECT_DIR$/out/artifacts/Snmp4JTrapRelay_jar</output-path>
+    <root id="archive" name="SnmpTrapRelay.jar">
+      <element id="module-output" name="Snmp4JTrapRelay" />
+      <element id="extracted-dir" path="$PROJECT_DIR$/lib/snmp4j-2.5.11.jar" path-in-jar="/" />
+    </root>
+  </artifact>
+</component>
