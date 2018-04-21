@@ -1,8 +1,16 @@
 package org.gobuki.net.snmp.traprelay;
 
+import org.snmp4j.CommandResponderEvent;
+
+import javax.net.ssl.SSLServerSocket;
+import javax.net.ssl.SSLServerSocketFactory;
+import javax.net.ssl.SSLSocket;
 import java.io.*;
 import java.net.*;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 
 /**
@@ -62,19 +70,28 @@ import java.util.concurrent.TimeUnit;
  *    sending register first, the server will hang in an infinite loop waiting for queue events.
  *
  */
-public class TrapRelayDaemon {
+public class TrapRelayDaemon implements TrapEventHandler {
+
+    public static final String REQUIRED_ENCRYPTION_PROTOCOL = "TLSv1.2";
 
     // Listening for SNMP trap events on udp/162
     TrapListener trapListener;
 
-    // Listening for tcp clients to register for receiving trap events
-    ServerSocket trapRelayServer;
+    TrapEventConverter<String> trapEventConverter;
+
+    SSLServerSocket sslServerSocket;
+
+    AtomicInteger clientCount;
 
     // If no trap events and no client commands were received, sleep for this many ms
-    int sleepTime = 500;
+    int sleepTime = 50;
+
+    Set<ClientConnectionHandlerThread> clientConnectionHandlerThreads;
 
     public TrapRelayDaemon() {
         trapListener = new TrapListener();
+        clientCount = new AtomicInteger(0);
+        clientConnectionHandlerThreads = new HashSet<ClientConnectionHandlerThread>();
     }
 
     /*
@@ -85,104 +102,129 @@ public class TrapRelayDaemon {
      */
     public void listenForClientConnections(String listeningAddress, int listeningPort) {
 
+        SSLServerSocketFactory sslServerSocketFactory =
+                (SSLServerSocketFactory) SSLServerSocketFactory.getDefault();
+
+        System.out.println("Supported cipher suites:");
+        for (String suite : sslServerSocketFactory.getSupportedCipherSuites()) {
+            System.out.println("\t" + suite);
+        }
+
+        try {
+            // open new server listening socket
+            sslServerSocket = (SSLServerSocket) sslServerSocketFactory.createServerSocket(listeningPort, 2, InetAddress.getByName(listeningAddress));
+            sslServerSocket.setNeedClientAuth(true);
+            requireProtocol(REQUIRED_ENCRYPTION_PROTOCOL);
+        } catch (ProtocolException e) {
+            System.err.println(e.getMessage());
+            System.err.println("exiting");
+            System.exit(2);
+        } catch (IOException e) {
+            System.err.println("IOException: " + e.getMessage());
+            System.err.println("exiting");
+            System.exit(2);
+        }
+
         // client connection loop, waits for new connections until a connection is opened
         // accepts new connections when the connections is closed
-        waitForConnection: while (true) {
-            System.out.println("waiting for a client connection");
-
-            Socket clientSocket;
-            PrintStream clientOutputStream;
-            BufferedReader clientInputReader;
-
+        System.out.println("Waiting for client connections");
+        acceptClientConnections: while (true) {
             try {
-                // open new server listening socket
-                trapRelayServer = new ServerSocket(listeningPort, 2, InetAddress.getByName(listeningAddress));
+                SSLSocket sslClientSocket = (SSLSocket) sslServerSocket.accept();
 
-                clientSocket = trapRelayServer.accept();
-                clientInputReader = new BufferedReader(new InputStreamReader(clientSocket.getInputStream()));
-                clientOutputStream = new PrintStream(clientSocket.getOutputStream());
+                ClientConnectionHandlerThread t = new ClientConnectionHandlerThread(sslClientSocket, trapListener, clientCount);
+                clientConnectionHandlerThreads.add(t);
+                t.start();
 
-                String clientCommand;
-                System.out.println("SERVER: waiting for REGISTER command from client");
-                waitForClientToRegister: while ((clientCommand = clientInputReader.readLine()) != null) {
-                    System.out.println("Client: " + clientCommand);
-                    if (clientCommand.indexOf("REGISTER") != -1) {
-                        System.out.println("client " + clientSocket.getInetAddress() + " registered");
-                        clientOutputStream.println("OK");
-                        break waitForClientToRegister;
-                    } else {
-                        try {
-                            TimeUnit.MILLISECONDS.sleep(sleepTime);
-                        } catch (InterruptedException e) {
-                            System.err.println(Thread.currentThread().getName() + ": client connection closing");
-                            e.printStackTrace();
-                            break waitForClientToRegister; // TODO... leads to the waitForTrapOrCommand loop without registering, waitForClientToRegister should be in the waitForTrapOrCommand loop
-                        }
-                    }
-                }
-
-                // a trap json string, if the queue has one
-                String jsonTrap;
-
-                // client/server communication loop
-                System.out.println("entering client communication loop for " + clientSocket.getInetAddress());
-                waitForTrapOrCommand: while (true) {
-                    try {
-                        jsonTrap = trapListener.getConvertedTrapQueue().poll();
-
-                        // Problem: if there are many traps coming in, they might cause
-                        // client commands to be delayed until the spam stops
-                        if (clientInputReader.ready()) {
-                            // new client command
-                            clientCommand = clientInputReader.readLine();
-
-                            switch (clientCommand) {
-                                case "QUIT":
-                                    System.out.println("client " + clientSocket.getInetAddress() + " disconnected");
-                                    clientOutputStream.close();
-                                    clientSocket.close();
-                                    trapRelayServer.close();
-
-                                    break waitForTrapOrCommand;
-                            }
-                            System.out.println("client sent " + clientCommand);
-                        } else if (jsonTrap != null) {
-                            // new trap to send over to the client
-                            //System.out.println("sending trap to client: " + jsonTrap);
-                            clientOutputStream.println(jsonTrap);
-
-                        } else {
-                            System.out.println("sleeping");
-                            TimeUnit.MILLISECONDS.sleep(sleepTime);
-                        }
-                    } catch (InterruptedException ex) {
-                        System.err.println(Thread.currentThread().getName() + ": client connection closing");
-                        ex.printStackTrace();
-                        break waitForTrapOrCommand;
-                    }
-                }
-
+                System.out.println("connection opened; client count:" + clientCount.incrementAndGet());
+                TimeUnit.MILLISECONDS.sleep(sleepTime);
             } catch (IOException e) {
                 System.out.println(e);
+                break acceptClientConnections;
+            } catch (InterruptedException e) {
+                System.out.println("interrupted");
+                break acceptClientConnections;
             }
+        }
+    }
+
+    /**
+     * Checks if a protocol is supported. If yes, it enables only this protocol for the sslServerSocket,
+     * throws an exception otherwise.
+     *
+     * @param protocol
+     * @throws ProtocolException if the protocol isn't found in the list of supported protocols and thus can not be enabled
+     */
+    private void requireProtocol(String protocol) throws ProtocolException {
+        System.out.println("Server supports these encryption protocols:");
+        boolean protocolIsSupported = false;
+        for (String supportedProtocol : sslServerSocket.getSupportedProtocols()) {
+            System.out.println("\t" + supportedProtocol);
+            if (supportedProtocol.equalsIgnoreCase(protocol)) {
+                protocolIsSupported = true;
+                break;
+            }
+        }
+        if (protocolIsSupported) {
+            sslServerSocket.setEnabledProtocols(new String[]{protocol});
+            System.out.println("Set '" + protocol + "' as only supported protocol.");
+        } else {
+            throw new ProtocolException("Required protocol not supported by server: " + protocol);
+        }
+    }
+
+    public void setTrapEventConverter(TrapEventConverter converter) {
+        this.trapEventConverter = converter;
+    }
+
+    /**
+     * Is called when the TrapListener recevied a trap.
+     * Distributes the trap event to all clients.
+     *
+     * @param event
+     */
+    @Override
+    public void handleTrapEvent(CommandResponderEvent event) {
+
+        for (ClientConnectionHandlerThread clientThread : clientConnectionHandlerThreads) {
+            if (clientThread.isAlive()) {
+                clientThread.offerTrap(trapEventConverter.convertTrap(event));
+            } else {
+                clientConnectionHandlerThreads.remove(clientThread);
+            }
+            // TODO: else remove?!
         }
     }
 
     public static void main(String args[]) {
 
+        //System.setProperty("javax.net.debug", "all");
+        System.setProperty("javax.net.ssl.keyStore", "sslserverkeys.p12");
+        System.setProperty("javax.net.ssl.keyStoreType", "PKCS12");
+        System.setProperty("javax.net.ssl.keyStorePassword", "password");
+        System.setProperty("javax.net.ssl.trustStore", "sslservertrust.p12");
+        System.setProperty("javax.net.ssl.trustStoreType", "PKCS12");
+        System.setProperty("javax.net.ssl.trustStorePassword", "password");
+
         if (args.length == 0) {
             // use defaults
             args = new String[]{ "localhost", "1162" };
-        } else if (args.length != 2) {
-            System.out.println("usage: " + TrapRelayDaemon.class.getCanonicalName() + " <listen address> <listen port>");
+        } else if (args.length == 2) {
+            // ok
+        } else {
+            System.out.println("Usage: " + TrapRelayDaemon.class.getCanonicalName() + " <listen address> <listen port>");
             System.exit(2);
         }
 
-        // Start server thread for TCP clients to connect
         TrapRelayDaemon trapDaemon = new TrapRelayDaemon();
+        trapDaemon.setTrapEventConverter(new TrapEventJsonConverter());
+        trapDaemon.trapListener.addTrapEventHandler(trapDaemon);
         // Start SNMP trap receiver threads
-        trapDaemon.trapListener.setTrapEventConverter(new TrapEventJsonConverter());
+
         trapDaemon.trapListener.run("udp:0.0.0.0/162");
+
+        // Start server thread for TCP clients to connect
         trapDaemon.listenForClientConnections(args[0], Integer.parseInt(args[1]));
     }
+
 }

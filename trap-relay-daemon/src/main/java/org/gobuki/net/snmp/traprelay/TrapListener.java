@@ -14,6 +14,8 @@ import org.snmp4j.util.MultiThreadedMessageDispatcher;
 import org.snmp4j.util.ThreadPool;
 
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Queue;
 import java.util.concurrent.ConcurrentLinkedQueue;
 
@@ -24,11 +26,10 @@ public class TrapListener implements CommandResponder {
     private Address snmpTrapListenAddress;
     private ThreadPool threadPool;
 
-    Queue<String> convertedTrapQueue;
-    TrapEventConverter<String> trapEventConverter;
+    List<TrapEventHandler> trapEventHandlers;
 
     public TrapListener() {
-        convertedTrapQueue = new ConcurrentLinkedQueue<String>();
+        trapEventHandlers = new ArrayList<TrapEventHandler>();
     }
 
     /**
@@ -65,25 +66,18 @@ public class TrapListener implements CommandResponder {
     }
 
     /**
-     * Converts received SNMP traps using a TrapEventConverter implementation and
-     * queues it
+     * Delegates handling of received trap events to the registered handlers
      *
      * @param event
      */
     @Override
     public void processPdu(CommandResponderEvent event) {
-        if (getConvertedTrapQueue().offer(trapEventConverter.convertTrap(event))) {
-            System.out.println("Trap relayed");
-        } else {
-            System.err.println("Dropping trap event. Queue is full.");
+        for (TrapEventHandler eventHandler : trapEventHandlers) {
+            eventHandler.handleTrapEvent(event);
         }
     }
 
-    public Queue<String> getConvertedTrapQueue() {
-        return convertedTrapQueue;
-    }
-
-    public void setTrapEventConverter(TrapEventConverter converter) {
-        this.trapEventConverter = converter;
+    public void addTrapEventHandler(TrapEventHandler handler) {
+        trapEventHandlers.add(handler);
     }
 }

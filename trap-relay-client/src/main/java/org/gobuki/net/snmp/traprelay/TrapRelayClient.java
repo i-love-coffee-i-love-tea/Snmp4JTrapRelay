@@ -1,8 +1,16 @@
 package org.gobuki.net.snmp.traprelay;
 
+import org.gobuki.net.snmp.traprelay.handler.JsonObjectTrapHandler;
+import org.gobuki.net.snmp.traprelay.handler.SimpleLoggingTrapHandler;
+import org.gobuki.net.snmp.traprelay.handler.TrapHandler;
+
+import javax.net.ssl.SSLSocketFactory;
 import java.io.*;
 import java.net.Socket;
 import java.net.UnknownHostException;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.TimeUnit;
 
 
 /**
@@ -12,51 +20,70 @@ import java.net.UnknownHostException;
  */
 public class TrapRelayClient {
 
-    Socket socket = null;
-    PrintStream ps = null;
-    InputStreamReader ir = null;
-    BufferedReader  bir = null;
+    Socket socket;
+    BufferedReader in;
+    PrintStream out;
+
+    List<TrapHandler> trapHandlers;
 
     public static void main(String[] args) {
+
+        System.setProperty("javax.net.ssl.keyStore", "sslclientkeys.p12");
+        System.setProperty("javax.net.ssl.keyStoreType", "PKCS12");
+        System.setProperty("javax.net.ssl.keyStorePassword", "password");
+        System.setProperty("javax.net.ssl.trustStore", "sslclienttrust.p12");
+        System.setProperty("javax.net.ssl.trustStoreType", "PKCS12");
+        System.setProperty("javax.net.ssl.trustStorePassword", "password");
 
         if (args.length == 0) {
             args = new String[]{"localhost", "1162"};
         }
 
         TrapRelayClient client = new TrapRelayClient();
+        client.addTrapHandler(new SimpleLoggingTrapHandler());
+        client.addTrapHandler(new JsonObjectTrapHandler());
         client.connectToServer(args[0], Integer.parseInt(args[1]));
     }
 
     public TrapRelayClient() {
-        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-            if (ps != null) {
-                ps.println("QUIT");
-                ps.close();
-
+        // Handle CTRL+c
+        Runtime.getRuntime().addShutdownHook(new Thread(new Runnable() {
+            @Override
+            public void run() {
+                if (out != null) { // if out isnt null socket must also be != null
+                    try {
+                        out.println("QUIT");
+                        socket.close();
+                    } catch (IOException e) {
+                        // ignore
+                    }
+                }
             }
-            System.out.println("shutdown hook called");
         }));
+        trapHandlers = new ArrayList<TrapHandler>();
     }
 
     public void connectToServer(String serverAddress, int serverPort) {
+        SSLSocketFactory sslSocketFactory =
+                (SSLSocketFactory) SSLSocketFactory.getDefault();
+
         try {
-            socket = new Socket(serverAddress, serverPort);
-            ps = new PrintStream(socket.getOutputStream());
-            ir = new InputStreamReader(socket.getInputStream());
-            bir = new BufferedReader(ir);
+            socket = sslSocketFactory.createSocket(serverAddress, serverPort);
+            in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
+            out = new PrintStream(socket.getOutputStream());
+
         } catch (UnknownHostException e) {
             System.err.println("Unknown host: " + serverAddress);
         } catch (IOException e) {
             System.err.println("Failed connecting with " + serverAddress + ". Is the relay service running?");
         }
 
-        if (socket != null && bir != null && ps != null) {
+        if (socket != null && in != null && out != null) {
             try {
-
-                ps.println("REGISTER all");
+                out.println("REGISTER all");
 
                 String responseLine;
-                waitForResigsterResponse: while ((responseLine = bir.readLine()) != null) {
+                waitForResigsterResponse: while ((responseLine = in.readLine()) != null) {
                     System.out.println("Server: " + responseLine);
                     if (responseLine.indexOf("OK") != -1) {
                         System.out.println("registered");
@@ -65,27 +92,27 @@ public class TrapRelayClient {
                 }
 
                 // event loop
-                receiveTraps: while ((responseLine = bir.readLine()) != null) {
-                    System.out.println("Server sent a trap: " + responseLine);
-
-                    // handle recevied traps here. possibly using jackson or javax JSON objects
-
-                    // how to interrupt?
-                    // by shutdown hook (implemented)
-                    // or server shutdown/restart command (idea)
-                    // - clients could go into a polling mode, trying to reconnect
+                receiveTraps: while ((responseLine = in.readLine()) != null) {
+                    for (TrapHandler handler : trapHandlers) {
+                        handler.handleTrap(responseLine);
+                    }
+                    //System.out.println("Sending ACK");
+                    out.println("ACK");
                 }
 
                 // close everything
-                ps.close();
-                bir.close();
-                ir.close();
+                out.close();
+                in.close();
                 socket.close();
             } catch (UnknownHostException e) {
                 System.err.println("Unknown host: " + e);
             } catch (IOException e) {
-                System.err.println("I/O Error:  " + e);
+                System.err.println(e.getMessage());
             }
         }
+    }
+
+    public void addTrapHandler(TrapHandler trapHandler) {
+        this.trapHandlers.add(trapHandler);
     }
 }

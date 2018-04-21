@@ -36,7 +36,67 @@ for tcp clients to connect, register and receive SNMP trap events in json format
 $ mvn package
 
 
-## Running it
+## Manage certificates 
+
+We will use the keytool to create SSL keys and for certificates for both server and clients.
+
+The keys are wrapped in openssl compatible PKCS12 keystores.
+
+For each client trust has to be setup by exporting and importing each others certificates into their peers keystore.
+
+You can run the create-keystores.sh script to initialize example keystores and skip the next topics "Create the server key- and truststore" and
+"Client key- and truststore setup" for testing.
+``` 
+cd scripts
+./create-keystores.sh
+```
+
+### Server key- and truststore setup
+
+**Create server keystore and keys**
+```
+keytool -genkey -alias sslserver -keystore sslserverkeys.p12 -storetype PKCS12 -storepass $PASS
+```
+When the keytool asks for your name "What is your first and last name?", you have to enter the hostname of the server.
+You can press enter for all other questions, for testing purposes.
+
+
+**Export server certificate**
+```
+keytool -export -alias sslserver -keystore sslserverkeys.p12 -file sslserver.cer -storetype PKCS12 -storepass $PASS
+```
+
+
+### Client key- and truststore setup
+
+The alias is just the name under which the keys will be stored. You can choose it freely, it only has to be unique.
+It is good practice to use the client name, something, you remeber or can look up and associate with this client.
+
+
+**Create client keystore and keys**
+```
+keytool -genkey -alias sslclient -keystore sslclientkeys.p12 -storetype PKCS12 -storepass $PASS -keyalg RSA
+```
+When the keytool asks for your name "What is your first and last name?", you have to enter the hostname of the client.
+You can press enter for all other questions, for testing purposes.
+
+**Export client certificate**
+```
+keytool -export -alias sslclient -keystore sslclientkeys.p12 -file sslclient.cer -storetype PKCS12 -storepass $PASS
+```
+
+**Import client certificate into server truststore**
+```
+keytool -import -alias sslclient -keystore sslservertrust.p12 -file sslclient.cer -storetype PKCS12 -storepass $PASS
+```
+Answer "yes" to make the client trust the server certificate.
+
+**Import server certificate into client truststore**
+```
+keytool -import -alias sslserver -keystore sslclienttrust.p12 -file sslserver.cer -storetype PKCS12 -storepass $PASS
+```
+
+## Run it
 
 1. Start the trap relay daemon:
 
@@ -75,29 +135,20 @@ They both take a hostname or ip as first parameter and a port number as second p
 
 
 
-
 ## Next steps to make it a mature project
 
-   - add timestamps to converted traps
-   - add SSLSocket for TLS 1.2, create certificate store for server and trust store for client
+   - Add MITM protection. See https://docs.oracle.com/javase/7/docs/api/javax/net/ssl/X509ExtendedTrustManager.html
+   - DONE Add timestamps to converted traps
+   - DONE add SSLSocket for TLS 1.2, create certificate store for server and trust store for client
         > https://stackoverflow.com/questions/28743482/java-sslserversocket-with-only-tls
-   - only allow connection with client ceritifcate
-   - allow simultaneous client connections
-   - create indidual queues for each snmp agent sending traps - limit maximum ammount
+   - DONE only allow connection with client ceritifcate
+   - DONE allow simultaneous client connections
+   - DONE use indidual trap queues for each client
    - extend REGISTER command to take an argument. So clients can register for SNMP trap events
      from sources they want to monitor.
    - add an UNREGISTER command
    - create a LIST channels command
-   - extend the protocol, so clients must ack received traps unless they want to receive it again
-   - create client and server jars
-   - client: implement exchangeable trap handling behaviour
-
-
-I have not used redis yet, but to me parts of this increasingly look similar.
-Perhaps i might as well use this, but I enjoy learning about server programming and like to find my own solutions.
-Also I have a feeling redis might pull in too many dependencies, which i don't need and want.
-It certainly has its many use cases where it does a great job, but it also has a ton of
-features like clustering which are overkill for my usecase
-  
-Most ugly problem apart from missing features: When a client disconnects without
-sending register first, the server will hang in an infinite loop waiting for queue events.
+   - DONE extend the protocol, so clients must ack received traps unless they want to receive it again 
+   - DONE create client and server jars
+   - DONE client: implement trap handler interface
+   - DONE Add dead client detection
