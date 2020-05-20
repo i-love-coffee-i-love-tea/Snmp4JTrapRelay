@@ -135,7 +135,7 @@ They both take a hostname or ip as first parameter and a port number as second p
 
 
 
-## Next steps to make it a mature project
+## TODO
 
    - Add MITM protection. See https://docs.oracle.com/javase/7/docs/api/javax/net/ssl/X509ExtendedTrustManager.html
    - DONE Add timestamps to converted traps
